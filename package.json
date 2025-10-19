@@ -4,11 +4,13 @@
   "type": "module",
   "main": "index.js",
   "scripts": { "start": "node index.js" },
+  "engines": { "node": ">=20" },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.6.0",
     "express": "^4.19.2",
     "qrcode": "^1.5.3",
     "dotenv": "^16.4.5",
-    "body-parser": "^1.20.2"
+    "body-parser": "^1.20.2",
+    "node-fetch": "^3.3.2"
   }
 }
