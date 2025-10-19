@@ -11,14 +11,19 @@ app.use(bodyParser.json());
 // ===== קונפיג כללי =====
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_KEY;               // סיסמת API פנימית
-const WEBAPP_URL = process.env.APPS_WEBAPP_URL;    // כתובת ה-WebApp של Apps Script ( /exec )
+const WEBAPP_URL = process.env.APPS_WEBAPP_URL;    // כתובת ה-WebApp של Apps Script (/exec)
 const WEBAPP_KEY = process.env.APPS_WEBAPP_KEY;    // אותו WEBAPP_KEY ששמת בסקריפט
-const AUTH_FILE = './AUTH_STATE.json';             // יישמר בקונטיינר
+const AUTH_FILE = './AUTH_STATE.json';             // יישמר בקונטיינר (רצוי Volume בהמשך)
 
 let sock = null;
 let lastQR = null;
 
-// ===== אבטחת API בסיסית =====
+const now = () => new Date().toISOString().replace('T',' ').slice(0,19);
+
+// ===== Health (ללא מפתח) =====
+app.get('/health', (_req, res) => res.json({ ok: true, ready: !!sock }));
+
+// ===== אבטחת API בסיסית (מגן על שאר הראוטים) =====
 function requireApiKey(req, res, next) {
   const k = req.header('x-api-key') || req.query.api_key;
   if (!API_KEY || k !== API_KEY) return res.status(401).json({ ok:false, error:'Unauthorized' });
@@ -26,7 +31,7 @@ function requireApiKey(req, res, next) {
 }
 app.use(requireApiKey);
 
-// ===== פונקציות עזר לכתיבה ל-Google Sheets דרך ה-WebApp =====
+// ===== כתיבה לשיטס דרך WebApp =====
 async function writeGroups(rows) {
   const r = await fetch(WEBAPP_URL, {
     method: 'POST',
@@ -37,14 +42,16 @@ async function writeGroups(rows) {
 }
 
 async function appendLog(row) {
-  await fetch(WEBAPP_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ key: WEBAPP_KEY, action: 'appendLog', row })
-  });
+  try {
+    await fetch(WEBAPP_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: WEBAPP_KEY, action: 'appendLog', row })
+    });
+  } catch (e) {
+    console.error('appendLog failed:', e?.message || e);
+  }
 }
-
-const now = () => new Date().toISOString().replace('T',' ').slice(0,19);
 
 // ===== WhatsApp (Baileys) =====
 async function startSession() {
@@ -60,7 +67,7 @@ async function startSession() {
 }
 
 async function fetchGroups() {
-  if (!sock) throw 'Session not started';
+  if (!sock) throw new Error('Session not started');
   const map = await sock.groupFetchAllParticipating();
   return Object.values(map).map(g => ({
     id: g.id,
@@ -71,12 +78,17 @@ async function fetchGroups() {
 }
 
 // ===== Endpoints =====
-app.get('/health', (req, res) => res.json({ ok: true, ready: !!sock }));
-
-app.post('/session/create', async (req, res) => {
+app.post('/session/create', async (_req, res) => {
   try {
     await startSession();
-    const qrDataUrl = lastQR ? await QRCode.toDataURL(lastQR, { width: 320 }) : null;
+    // ייתכן שה-QR מגיע רק אחרי עדכון ראשון — נסה להביא שוב אם לא הגיע מיד
+    let qrDataUrl = null;
+    if (lastQR) {
+      qrDataUrl = await QRCode.toDataURL(lastQR, { width: 320 });
+    } else {
+      await new Promise(r => setTimeout(r, 1200));
+      if (lastQR) qrDataUrl = await QRCode.toDataURL(lastQR, { width: 320 });
+    }
     await appendLog([now(),'default','system','session.create','-','OK','']);
     res.json({ ok: true, qr: qrDataUrl });
   } catch (e) {
@@ -85,7 +97,7 @@ app.post('/session/create', async (req, res) => {
   }
 });
 
-app.post('/groups/sync', async (req, res) => {
+app.post('/groups/sync', async (_req, res) => {
   try {
     const groups = await fetchGroups();
     await writeGroups(groups.map(g => ({ ...g, primarySession: 'default', inviteLink: '' })));
@@ -97,4 +109,4 @@ app.post('/groups/sync', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log('WISPRA server :' + PORT));
+app.listen(PORT, () => console.log('WISPRA server listening on port', PORT));
